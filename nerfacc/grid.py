@@ -197,30 +197,6 @@ def traverse_grids(
         over_allocate,
     )
 
-    intervals_cpu, samples_cpu, termination_planes = _traverse_grids(
-        # rays
-        rays_o.contiguous().cpu(),  # [n_rays, 3]
-        rays_d.contiguous().cpu(),  # [n_rays, 3]
-        rays_mask.contiguous().cpu(),  # [n_rays]
-        # grids
-        binaries.contiguous().cpu(),  # [m, resx, resy, resz]
-        aabbs.contiguous().cpu(),  # [m, 6]
-        # intersections
-        t_sorted.contiguous().cpu(),  # [n_rays, m * 2]
-        t_indices.contiguous().cpu(),  # [n_rays, m * 2]
-        hits.contiguous().cpu(),  # [n_rays, m]
-        # options
-        near_planes.contiguous().cpu(),  # [n_rays]
-        far_planes.contiguous().cpu(),  # [n_rays]
-        step_size,
-        cone_angle,
-        True,
-        True,
-        True,
-        traverse_steps_limit,
-        over_allocate,
-    )
-
     if traverse_grids_func is _C.traverse_grids:
         intervals = RayIntervals._from_cpp(intervals)
         samples = RaySamples._from_cpp(samples)
