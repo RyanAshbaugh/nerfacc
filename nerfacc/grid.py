@@ -197,12 +197,33 @@ def traverse_grids(
         over_allocate,
     )
 
+    intervals_cpu, samples_cpu, termination_planes = _traverse_grids(
+        # rays
+        rays_o.contiguous().cpu(),  # [n_rays, 3]
+        rays_d.contiguous().cpu(),  # [n_rays, 3]
+        rays_mask.contiguous().cpu(),  # [n_rays]
+        # grids
+        binaries.contiguous().cpu(),  # [m, resx, resy, resz]
+        aabbs.contiguous().cpu(),  # [m, 6]
+        # intersections
+        t_sorted.contiguous().cpu(),  # [n_rays, m * 2]
+        t_indices.contiguous().cpu(),  # [n_rays, m * 2]
+        hits.contiguous().cpu(),  # [n_rays, m]
+        # options
+        near_planes.contiguous().cpu(),  # [n_rays]
+        far_planes.contiguous().cpu(),  # [n_rays]
+        step_size,
+        cone_angle,
+        True,
+        True,
+        True,
+        traverse_steps_limit,
+        over_allocate,
+    )
+
     if traverse_grids_func is _C.traverse_grids:
         intervals = RayIntervals._from_cpp(intervals)
         samples = RaySamples._from_cpp(samples)
-    else:
-        intervals = RayIntervals(intervals)
-        samples = RaySamples(samples)
 
     return (
         intervals,
@@ -229,18 +250,32 @@ def _traverse_grids(
     traverse_steps_limit, # <= 0 means no limit
     over_allocate,
 ):
+    rays_o, rays_d, rays_mask, binaries, aabbs, t_sorted, t_indices, hits, near_planes, far_planes = [
+        xx.cpu() for xx in [rays_o, rays_d, rays_mask, binaries, aabbs, t_sorted, t_indices, hits, near_planes, far_planes]
+    ]
+
     # Initialize output tensors
     n_rays = rays_o.shape[0]
     n_grids = binaries.shape[0]
     resx, resy, resz = binaries.shape[1:4]
 
-    intervals = []
-    samples = []
+    all_intervals = []
+    all_samples = []
+    all_is_left = []
+    all_is_right = []
+    all_ray_indices = []
+
+    packed_info_intervals = []
+    packed_info_samples = []
+
     terminate_planes = torch.zeros(n_rays, dtype=torch.float32) if compute_terminate_planes else None
 
+    packed_info_intervals = torch.zeros((n_rays, 2), dtype=torch.long)
+    packed_info_samples = torch.zeros((n_rays, 2), dtype=torch.long)
+
     for ray_idx in range(n_rays):
-        if rays_mask is not None and not rays_mask[ray_idx]:
-            continue
+        # if rays_mask is not None and not rays_mask[ray_idx]:
+        #     continue
 
         ray_origin = rays_o[ray_idx]
         ray_dir = rays_d[ray_idx]
@@ -251,55 +286,77 @@ def _traverse_grids(
         n_intervals = 0
         n_samples = 0
         continuous = False
+        ray_intervals = []
+        ray_samples = []
+        ray_is_left = []
+        ray_is_right = []
 
         for grid_idx in range(n_grids):
-            if not hits[ray_idx, grid_idx]:
-                continue
+            # if not hits[ray_idx, grid_idx]:
+            #     continue
 
             aabb_min = aabbs[grid_idx, :3]
             aabb_max = aabbs[grid_idx, 3:]
 
-            # Check for ray intersection with grid
-            for intersection_idx in range(2 * grid_idx, 2 * (grid_idx + 1), 2):
-                t_min = max(t_sorted[ray_idx, intersection_idx], near_plane)
-                t_max = min(t_sorted[ray_idx, intersection_idx + 1], far_plane)
-                if t_min >= t_max:
-                    continue
+            t_min = max(near_plane, torch.dot((aabb_min - ray_origin), ray_dir))
+            t_max = min(far_plane, torch.dot((aabb_max - ray_origin), ray_dir))
+            if t_min >= t_max:
+                continue
 
-                # Traverse the grid along the ray
-                while t_last < t_max and (traverse_steps_limit <= 0 or n_samples < traverse_steps_limit):
-                    t_next = t_last + (step_size if step_size > 0 else 1e-6)
-                    t_next = min(t_next, t_max)
+            while t_last < t_max:
+                t_next = t_last + step_size
+                if t_next > t_max:
+                    t_next = t_max
 
-                    mid_t = (t_last + t_next) / 2
+                mid_t = (t_last + t_next) / 2
+                voxel_idx = ((mid_t - aabb_min) / (aabb_max - aabb_min) * torch.tensor([resx, resy, resz])).long()
 
-                    # Compute voxel index
-                    voxel_idx = ((mid_t - aabb_min) / (aabb_max - aabb_min) * torch.tensor([resx, resy, resz])).long()
+                if 0 <= voxel_idx[0] < resx and 0 <= voxel_idx[1] < resy and 0 <= voxel_idx[2] < resz:
+                    binary_idx = grid_idx * resx * resy * resz + voxel_idx[0] * resy * resz + voxel_idx[1] * resz + voxel_idx[2]
+                    if binaries.view(-1)[binary_idx]:
+                        # Record interval
+                        ray_intervals.append(t_last)
+                        ray_intervals.append(t_next)
+                        ray_is_left.append(True)
+                        ray_is_right.append(False)
 
-                    if 0 <= voxel_idx[0] < resx and 0 <= voxel_idx[1] < resy and 0 <= voxel_idx[2] < resz:
-                        binary_idx = grid_idx * resx * resy * resz + voxel_idx[0] * resy * resz + voxel_idx[1] * resz + voxel_idx[2]
-                        if binaries.view(-1)[binary_idx]:
-                            # Record interval or sample
-                            if compute_intervals:
-                                intervals.append((ray_idx, t_last, t_next))
-                            if compute_samples:
-                                samples.append((ray_idx, mid_t))
+                        # Record sample
+                        ray_samples.append(mid_t)
 
-                            n_samples += 1
-                            continuous = True
-                        else:
-                            continuous = False
+                        n_intervals += 1
+                        n_samples += 1
 
-                    t_last = t_next
+                t_last = t_next
 
-        if compute_terminate_planes:
-            terminate_planes[ray_idx] = t_last
+        # Store packed information for this ray
+        if ray_intervals:
+            packed_info_intervals[ray_idx] = torch.tensor([len(all_intervals), len(ray_intervals)])
+            all_intervals.extend(ray_intervals)
+            all_is_left.extend(ray_is_left)
+            all_is_right.extend(ray_is_right)
+            all_ray_indices.extend([ray_idx] * len(ray_intervals))
 
-    # Convert lists to tensors
-    if compute_intervals:
-        intervals = torch.tensor(intervals, dtype=torch.float32)
-    if compute_samples:
-        samples = torch.tensor(samples, dtype=torch.float32)
+        if ray_samples:
+            packed_info_samples[ray_idx] = torch.tensor([len(all_samples), len(ray_samples)])
+            all_samples.extend(ray_samples)
+            all_ray_indices.extend([ray_idx] * len(ray_samples))
+
+        # if compute_terminate_planes:
+        #     terminate_planes[ray_idx] = t_last
+
+    # Convert results to tensors
+    intervals = RayIntervals(
+        vals=torch.tensor(all_intervals, dtype=torch.float32),
+        packed_info=packed_info_intervals,
+        ray_indices=torch.tensor(all_ray_indices, dtype=torch.long),
+        is_left=torch.tensor(all_is_left, dtype=torch.bool),
+        is_right=torch.tensor(all_is_right, dtype=torch.bool),
+    )
+    samples = RaySamples(
+        vals=torch.tensor(all_samples, dtype=torch.float32),
+        packed_info=packed_info_samples,
+        ray_indices=torch.tensor(all_ray_indices, dtype=torch.long),
+    )
 
     return intervals, samples, terminate_planes
 
