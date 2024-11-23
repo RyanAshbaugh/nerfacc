@@ -241,9 +241,6 @@ def _traverse_grids(
     all_is_right = []
     all_ray_indices = []
 
-    packed_info_intervals = []
-    packed_info_samples = []
-
     terminate_planes = torch.zeros(n_rays, dtype=torch.float32) if compute_terminate_planes else None
 
     packed_info_intervals = torch.zeros((n_rays, 2), dtype=torch.long)
