@@ -239,7 +239,8 @@ def _traverse_grids(
     all_samples = []
     all_is_left = []
     all_is_right = []
-    all_ray_indices = []
+    interval_ray_indices = []
+    sample_ray_indices = []
 
     terminate_planes = torch.zeros(n_rays, dtype=torch.float32) if compute_terminate_planes else None
 
@@ -290,8 +291,12 @@ def _traverse_grids(
                         # Record interval
                         ray_intervals.append(t_last)
                         ray_intervals.append(t_next)
+
                         ray_is_left.append(True)
+                        ray_is_left.append(False)
+
                         ray_is_right.append(False)
+                        ray_is_right.append(True)
 
                         # Record sample
                         ray_samples.append(mid_t)
@@ -307,12 +312,12 @@ def _traverse_grids(
             all_intervals.extend(ray_intervals)
             all_is_left.extend(ray_is_left)
             all_is_right.extend(ray_is_right)
-            all_ray_indices.extend([ray_idx] * len(ray_intervals))
+            interval_ray_indices.extend([ray_idx] * len(ray_intervals))
 
         if ray_samples:
             packed_info_samples[ray_idx] = torch.tensor([len(all_samples), len(ray_samples)])
             all_samples.extend(ray_samples)
-            all_ray_indices.extend([ray_idx] * len(ray_samples))
+            sample_ray_indices.extend([ray_idx] * len(ray_samples))
 
         # if compute_terminate_planes:
         #     terminate_planes[ray_idx] = t_last
@@ -321,14 +326,14 @@ def _traverse_grids(
     intervals = RayIntervals(
         vals=torch.tensor(all_intervals, dtype=torch.float32),
         packed_info=packed_info_intervals,
-        ray_indices=torch.tensor(all_ray_indices, dtype=torch.long),
+        ray_indices=torch.tensor(interval_ray_indices, dtype=torch.long),
         is_left=torch.tensor(all_is_left, dtype=torch.bool),
         is_right=torch.tensor(all_is_right, dtype=torch.bool),
     )
     samples = RaySamples(
         vals=torch.tensor(all_samples, dtype=torch.float32),
         packed_info=packed_info_samples,
-        ray_indices=torch.tensor(all_ray_indices, dtype=torch.long),
+        ray_indices=torch.tensor(sample_ray_indices, dtype=torch.long),
     )
 
     return intervals, samples, terminate_planes
