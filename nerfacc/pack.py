@@ -35,15 +35,14 @@ def pack_info(ray_indices: Tensor, n_rays: Optional[int] = None) -> Tensor:
     assert (
         ray_indices.dim() == 1
     ), "ray_indices must be a 1D tensor with shape (n_samples)."
-    if ray_indices.is_cuda:
-        device = ray_indices.device
-        dtype = ray_indices.dtype
-        if n_rays is None:
-            n_rays = ray_indices.max().item() + 1
-        chunk_cnts = torch.zeros((n_rays,), device=device, dtype=dtype)
-        chunk_cnts.index_add_(0, ray_indices, torch.ones_like(ray_indices))
-        chunk_starts = chunk_cnts.cumsum(dim=0, dtype=dtype) - chunk_cnts
-        packed_info = torch.stack([chunk_starts, chunk_cnts], dim=-1)
-    else:
-        raise NotImplementedError("Only support cuda inputs.")
+
+    device = ray_indices.device
+    dtype = ray_indices.dtype
+    if n_rays is None:
+        n_rays = ray_indices.max().item() + 1
+    chunk_cnts = torch.zeros((n_rays,), device=device, dtype=dtype)
+    chunk_cnts.index_add_(0, ray_indices, torch.ones_like(ray_indices))
+    chunk_starts = chunk_cnts.cumsum(dim=0, dtype=dtype) - chunk_cnts
+    packed_info = torch.stack([chunk_starts, chunk_cnts], dim=-1)
+
     return packed_info
