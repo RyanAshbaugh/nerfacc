@@ -207,6 +207,31 @@ def traverse_grids(
         termination_planes,
     )
 
+def check_intersection_point_on_aabb_surface(point, aabb, epsilon=1e-9):
+    aabb_min = aabb[:3]
+    aabb_max = aabb[3:]
+
+    assert ((point - aabb_min) > -epsilon).all() and ((point - aabb_max) < epsilon).all(), \
+        f"Intersection point {point} does not lie on any surfaces of aabb {aabb}"
+
+def get_ray_intersection_distances(aabb, ray_origin, ray_dir, near_plane, far_plane):
+    aabb_min = aabb[:3]
+    aabb_max = aabb[3:]
+
+    t1 = (aabb_min - ray_origin) / ray_dir
+    t2 = (aabb_max - ray_origin) / ray_dir
+
+    t_min_vals = torch.minimum(t1, t2)
+    t_max_vals = torch.maximum(t1, t2)
+
+    t_min = torch.max(torch.cat((t_min_vals, torch.tensor([near_plane]))))
+    t_max = torch.min(torch.cat((t_max_vals, torch.tensor([far_plane]))))
+
+    return t_min, t_max
+
+def get_point_from_distance_on_ray(ray_origin, ray_dir, t):
+    return ray_origin + t * ray_dir
+
 def _traverse_grids(
     rays_o,         # [n_rays, 3]
     rays_d,         # [n_rays, 3]
@@ -272,8 +297,23 @@ def _traverse_grids(
             aabb_min = aabbs[grid_idx, :3]
             aabb_max = aabbs[grid_idx, 3:]
 
-            t_min = max(near_plane, torch.dot((aabb_min - ray_origin), ray_dir))
-            t_max = min(far_plane, torch.dot((aabb_max - ray_origin), ray_dir))
+            t_min, t_max = get_ray_intersection_distances(
+                aabb=aabbs[grid_idx],
+                ray_origin=ray_origin,
+                ray_dir=ray_dir,
+                near_plane=near_plane,
+                far_plane=far_plane,
+            )
+
+            intersection_point_close = get_point_from_distance_on_ray(ray_origin, ray_dir, t_min)
+            intersection_point_far = get_point_from_distance_on_ray(ray_origin, ray_dir, t_max)
+
+            try:
+                check_intersection_point_on_aabb_surface(intersection_point_close, aabbs[grid_idx])
+                check_intersection_point_on_aabb_surface(intersection_point_far, aabbs[grid_idx])
+            except AssertionError:
+                continue
+
             if t_min >= t_max:
                 continue
 

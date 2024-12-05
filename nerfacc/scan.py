@@ -89,6 +89,14 @@ def exclusive_sum(
             ),
             dim=-1,
         )
+    elif not torch.cuda.is_available():
+        inputs = inputs.squeeze()
+        outputs = torch.zeros_like(inputs)
+        for start, count in packed_info:
+            segment = inputs[start:start + count]
+            outputs[start:start + count] = torch.cat(
+                [torch.zeros(1, dtype=inputs.dtype), torch.cumsum(segment[:-1], dim=0)]
+            )
     else:
         # Flattened exclusive sum.
         assert inputs.dim() == 1, "inputs must be flattened."
